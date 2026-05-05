@@ -26,7 +26,9 @@ Environment:
   USER_MAC                    USER Mac SSH target that receives the connector.
   USER_COMMAND_PATH           Command path created on USER Mac. Default: ~/bin/tmate-corpo
   CORPO_SSH_PORT              CORPO user-space sshd port. Default: 2222
-  USER_REVERSE_PORT           USER localhost port exposed by reverse tunnel. Default: 2223
+  USER_REVERSE_PORT           USER reverse-tunnel port. Default: 2223
+  USER_REVERSE_BIND_HOST      USER LAN bind host for reverse tunnel. Default: auto
+  USER_CONNECT_HOST           Host written into USER command. Default: auto
   SKIP_SSH_COPY_ID            Do not try ssh-copy-id during install. Default: 0
 
 Examples:
@@ -141,7 +143,9 @@ configure() {
   USER_COMMAND_PATH="$(prompt_default "Command path to create on USER Mac" "${USER_COMMAND_PATH:-$FILE_TARGET_PATH}")"
   FILE_TARGET_PATH="$USER_COMMAND_PATH"
   CORPO_SSH_PORT="$(prompt_default "CORPO user-space sshd port" "$CORPO_SSH_PORT")"
-  USER_REVERSE_PORT="$(prompt_default "USER localhost reverse-tunnel port" "$USER_REVERSE_PORT")"
+  USER_REVERSE_PORT="$(prompt_default "USER reverse-tunnel port" "$USER_REVERSE_PORT")"
+  USER_REVERSE_BIND_HOST="$(prompt_default "USER reverse-tunnel bind host, use auto for USER LAN IP" "$USER_REVERSE_BIND_HOST")"
+  USER_CONNECT_HOST="$(prompt_default "Host written into USER command, use auto for USER LAN IP" "$USER_CONNECT_HOST")"
   REMOTE_INSTALL_WITH_SUDO=0
   SKIP_SSH_COPY_ID="$(prompt_yes_no "Skip ssh-copy-id attempts during install?" "$SKIP_SSH_COPY_ID")"
 
@@ -300,6 +304,8 @@ doctor() {
   printf '  USER_COMMAND_PATH: %s\n' "$FILE_TARGET_PATH"
   printf '  CORPO_SSH_PORT: %s\n' "$CORPO_SSH_PORT"
   printf '  USER_REVERSE_PORT: %s\n' "$USER_REVERSE_PORT"
+  printf '  USER_REVERSE_BIND_HOST: %s\n' "$USER_REVERSE_BIND_HOST"
+  printf '  USER_CONNECT_HOST: %s\n' "$USER_CONNECT_HOST"
   printf '  REMOTE_INSTALL_WITH_SUDO: 0 (forced; sudo install is disabled)\n'
   printf '  SKIP_SSH_COPY_ID: %s\n' "$SKIP_SSH_COPY_ID"
   printf '  SSHD_BIN: %s\n' "$SSHD_BIN"
@@ -326,14 +332,23 @@ doctor() {
   printf '\nChecking USER Mac PATH setup...\n'
   remote_ensure_user_command_path_on_path
 
+  local bind_host
+  local connect_host
+  bind_host="$(resolved_user_reverse_bind_host)"
+  connect_host="$(resolved_user_connect_host)"
+
+  printf '\nResolved USER LAN bind host: %s\n' "$bind_host"
+  printf 'Resolved USER command host: %s\n' "$connect_host"
+
   printf '\nChecking USER reverse tunnel port...\n'
-  ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" /bin/bash -s -- "$USER_REVERSE_PORT" <<'REMOTE'
+  ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" /bin/bash -s -- "$connect_host" "$USER_REVERSE_PORT" <<'REMOTE'
 set -euo pipefail
-port="$1"
-if nc -z 127.0.0.1 "$port" >/dev/null 2>&1; then
-  printf 'OK: USER localhost port %s is listening.\n' "$port"
+host="$1"
+port="$2"
+if nc -z "$host" "$port" >/dev/null 2>&1; then
+  printf 'OK: USER reverse tunnel %s:%s is listening.\n' "$host" "$port"
 else
-  printf 'Missing: USER localhost port %s is not listening. Run: make install or make restart\n' "$port"
+  printf 'Missing: USER reverse tunnel %s:%s is not listening. Run: make install or make restart\n' "$host" "$port"
 fi
 REMOTE
 }

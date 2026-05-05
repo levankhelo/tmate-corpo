@@ -4,11 +4,11 @@
 
 The goal of this spike is to make CORPO Macs, where normal macOS Remote Login or inbound SSH may be disabled, reachable from a personal USER Mac over the same LAN with minimum latency.
 
-Instead of `tmate`, this branch runs a private user-space `sshd` bound to `127.0.0.1` on the CORPO Mac, then opens a reverse SSH tunnel from CORPO to USER. That avoids inbound connections to CORPO while still letting the USER connect with normal `ssh`.
+Instead of `tmate`, this branch runs a private user-space `sshd` bound to `127.0.0.1` on the CORPO Mac, then opens a reverse SSH tunnel from CORPO to the USER Mac LAN IP. That avoids inbound connections to CORPO while still letting the USER connect with normal `ssh`.
 
 The USER Mac must be reachable from the CORPO Mac over the same LAN with Remote Login enabled, because the CORPO Mac uses SSH only to publish or refresh the small `tmate-corpo` connector command on the USER Mac. After that, the USER connects back into the CORPO Mac by running `tmate-corpo` from their personal machine.
 
-`tmate-corpo` runs on the CORPO Mac. It keeps a background CORPO-owned `sshd` plus reverse tunnel running and publishes a simple `tmate-corpo` command to the USER Mac over SSH. The generated USER command connects to `127.0.0.1:USER_REVERSE_PORT` on the USER Mac, which forwards over the tunnel into CORPO.
+`tmate-corpo` runs on the CORPO Mac. It keeps a background CORPO-owned `sshd` plus reverse tunnel running and publishes a simple `tmate-corpo` command to the USER Mac over SSH. The generated USER command connects to `USER_CONNECT_HOST:USER_REVERSE_PORT` on the USER Mac, which forwards over the tunnel into CORPO. By default `USER_CONNECT_HOST=auto`, so the install detects the USER Mac LAN IP.
 
 ## Architecture
 
@@ -26,7 +26,7 @@ flowchart LR
 
   subgraph USER["USER Mac"]
     remoteLogin["Remote Login enabled"]
-    reversePort["127.0.0.1:USER_REVERSE_PORT"]
+    reversePort["USER_LAN_IP:USER_REVERSE_PORT"]
     command["tmate-corpo command   USER_COMMAND_PATH"]
     userRun["USER runs:   tmate-corpo"]
   end
@@ -41,7 +41,7 @@ flowchart LR
   tunnel --> reversePort
   service -->|"SSH writes updated connector"| command
   userRun --> command
-  command -->|"ssh -p USER_REVERSE_PORT 127.0.0.1"| reversePort
+  command -->|"ssh -p USER_REVERSE_PORT USER_LAN_IP"| reversePort
   reversePort --> sshd
 ```
 
@@ -94,6 +94,21 @@ make install
 ```
 
 `make install` creates `~/bin` on the USER Mac if needed, writes the executable connector at `~/bin/tmate-corpo`, runs `chmod 0755`, and adds `$HOME/bin` to the USER Mac zsh startup files before it returns. The background service keeps the CORPO user-space `sshd` and reverse tunnel running.
+
+By default, the reverse tunnel binds on the USER Mac LAN IP:
+
+```bash
+USER_REVERSE_BIND_HOST=auto
+USER_CONNECT_HOST=auto
+```
+
+If the reverse tunnel fails with a remote forwarding error, the USER Mac OpenSSH server is probably refusing non-loopback reverse binds. On the USER Mac, enable client-selected gateway ports in `/etc/ssh/sshd_config`:
+
+```text
+GatewayPorts clientspecified
+```
+
+Then restart Remote Login. If you only need the command to work locally on the USER Mac, use `USER_REVERSE_BIND_HOST=127.0.0.1 USER_CONNECT_HOST=127.0.0.1 make config`.
 
 By default, the USER Mac command is written to:
 

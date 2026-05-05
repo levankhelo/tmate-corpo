@@ -14,5 +14,5 @@ connect_command="$(corpo_ssh_command)"
 publish_connector "$connect_command"
 start_reverse_tunnel
 
-log "starting user-space sshd on 127.0.0.1:$CORPO_SSH_PORT"
+log "starting user-space sshd on CORPO 127.0.0.1:$CORPO_SSH_PORT"
 exec "$SSHD_BIN" -D -f "$SSHD_CONFIG" -E "$SSHD_LOG"
