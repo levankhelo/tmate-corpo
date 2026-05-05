@@ -86,22 +86,24 @@ Then install and start the LaunchAgent:
 make install
 ```
 
+`make install` creates `~/bin` on the USER Mac if needed and writes the executable connector at `~/bin/tmate-corpo` before it returns. The background service keeps that file updated when the CORPO tmate session changes.
+
 By default, the USER Mac command is written to:
 
 ```text
-/usr/local/bin/tmate-corpo
+~/bin/tmate-corpo
 ```
 
-That path usually requires passwordless sudo for the USER Mac account. Configure with:
+That path is resolved on the USER Mac under the SSH user's home directory and does not need sudo. Configure with:
 
 ```bash
-USER_COMMAND_PATH='/usr/local/bin/tmate-corpo' REMOTE_INSTALL_WITH_SUDO=1 make config
+USER_COMMAND_PATH='~/bin/tmate-corpo' make config
 ```
 
-If you want a different location, set another absolute writable path on the USER Mac:
+If `tmate-corpo` is not found on the USER Mac after install, add `~/bin` to that user's `PATH`, or run it with the full path:
 
 ```bash
-USER_COMMAND_PATH='/some/writable/path/tmate-corpo' make config
+~/bin/tmate-corpo
 ```
 
 ## Use
@@ -139,10 +141,16 @@ If install fails with a USER Mac path error, first inspect the loaded config and
 make doctor
 ```
 
-For the default `/usr/local/bin/tmate-corpo` setup, use passwordless sudo on the USER Mac:
+If `~/bin/tmate-corpo` is missing on the USER Mac but the service is configured, republish the current connector:
 
 ```bash
-USER_MAC=macmini USER_COMMAND_PATH='/usr/local/bin/tmate-corpo' REMOTE_INSTALL_WITH_SUDO=1 make config
+make once
+```
+
+For the default USER home setup:
+
+```bash
+USER_MAC=macmini USER_COMMAND_PATH='~/bin/tmate-corpo' make config
 make install
 ```
 

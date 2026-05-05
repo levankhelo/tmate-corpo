@@ -24,9 +24,8 @@ Usage:
 
 Environment:
   USER_MAC                    USER Mac SSH target that receives the connector.
-  USER_COMMAND_PATH           Command path created on USER Mac. Default: /usr/local/bin/tmate-corpo
+  USER_COMMAND_PATH           Command path created on USER Mac. Default: ~/bin/tmate-corpo
   TMATE_BIN                   Absolute tmate path. Auto-detected during install.
-  REMOTE_INSTALL_WITH_SUDO    Use noninteractive sudo install on USER Mac. Default: 0
   SKIP_SSH_COPY_ID            Do not try ssh-copy-id during install. Default: 0
   TMATE_REFRESH_SECONDS       Manager loop interval. Default: 10
   TMATE_EMPTY_GRACE_SECONDS   Seconds after last client leaves before restart. Default: 5
@@ -36,8 +35,7 @@ Examples:
   make config
   make install
   USER_MAC=alex@mac-mini.local make install
-  USER_MAC=alex@mac-mini.local USER_COMMAND_PATH='/usr/local/bin/tmate-corpo' REMOTE_INSTALL_WITH_SUDO=1 make install
-  USER_MAC=alex@mac-mini.local REMOTE_INSTALL_WITH_SUDO=1 make install
+  USER_MAC=alex@mac-mini.local USER_COMMAND_PATH='~/bin/tmate-corpo' make install
 EOF
 }
 
@@ -116,9 +114,9 @@ check_config_access() {
     else
       printf 'Issue: cannot write %s on %s.\n' "$FILE_TARGET_PATH" "$FILE_TARGET_MAC"
       printf 'Suggested steps:\n'
-      printf '  1. Configure passwordless sudo on USER Mac and set REMOTE_INSTALL_WITH_SUDO=1.\n'
-      printf '  2. Re-run: USER_COMMAND_PATH='\''/usr/local/bin/tmate-corpo'\'' REMOTE_INSTALL_WITH_SUDO=1 make config\n'
-      printf '  3. Or choose another writable absolute path on USER Mac.\n'
+      printf '  1. Use the USER home path: USER_COMMAND_PATH='\''~/bin/tmate-corpo'\'' make config\n'
+      printf '  2. Re-run: make doctor\n'
+      printf '  3. If ~/bin is not on PATH on USER Mac, add it there after install.\n'
     fi
   fi
 
@@ -144,7 +142,7 @@ configure() {
 
   USER_COMMAND_PATH="$(prompt_default "Command path to create on USER Mac" "${USER_COMMAND_PATH:-$FILE_TARGET_PATH}")"
   FILE_TARGET_PATH="$USER_COMMAND_PATH"
-  REMOTE_INSTALL_WITH_SUDO="$(prompt_yes_no "Use noninteractive sudo for install on USER Mac?" "$REMOTE_INSTALL_WITH_SUDO")"
+  REMOTE_INSTALL_WITH_SUDO=0
   SKIP_SSH_COPY_ID="$(prompt_yes_no "Skip ssh-copy-id attempts during install?" "$SKIP_SSH_COPY_ID")"
 
   require_tmate
@@ -203,6 +201,15 @@ launchctl_bootstrap() {
   launchctl kickstart -k "$domain/$LABEL" >/dev/null 2>&1 || true
 }
 
+publish_current_connector() {
+  local connect_command
+
+  start_tmate
+  connect_command="$(tmate_connect_command)"
+  [[ -n "$connect_command" ]] || die "tmate did not return a connect command"
+  publish_connector "$connect_command"
+}
+
 install_files() {
   mkdir -p "$INSTALL_ROOT/bin" "$INSTALL_ROOT/lib" "$LOG_DIR"
   install -m 0755 "$REPO_ROOT/bin/tmate-corpo-service" "$INSTALLED_SERVICE"
@@ -219,10 +226,11 @@ install_service() {
   write_plist
   ensure_ssh_login
   preflight_target_path
+  publish_current_connector
   launchctl_bootstrap
 
   log "installed and started $LABEL"
-  log "USER Mac command will be written to $FILE_TARGET_MAC:$FILE_TARGET_PATH"
+  log "USER Mac command was written to $FILE_TARGET_MAC:$FILE_TARGET_PATH"
 }
 
 uninstall_service() {
@@ -283,7 +291,7 @@ doctor() {
   printf '  runtime config: %s\n' "$CONFIG_FILE"
   printf '  USER_MAC: %s\n' "${FILE_TARGET_MAC:-unset}"
   printf '  USER_COMMAND_PATH: %s\n' "$FILE_TARGET_PATH"
-  printf '  REMOTE_INSTALL_WITH_SUDO: %s\n' "$REMOTE_INSTALL_WITH_SUDO"
+  printf '  REMOTE_INSTALL_WITH_SUDO: 0 (forced; sudo install is disabled)\n'
   printf '  SKIP_SSH_COPY_ID: %s\n' "$SKIP_SSH_COPY_ID"
   printf '  TMATE_BIN: %s\n' "${TMATE_BIN:-unset}"
   printf '\n'
@@ -296,7 +304,14 @@ doctor() {
 
   printf 'Checking USER Mac command path with create mode...\n'
   remote_check_user_command_path create
-  printf 'OK: USER Mac command path is writable.\n'
+  printf 'OK: USER Mac command path is writable.\n\n'
+
+  printf 'Checking whether USER Mac command currently exists...\n'
+  if remote_user_command_exists; then
+    printf 'OK: USER Mac command exists.\n'
+  else
+    printf 'Missing: USER Mac command has not been published yet. Run: make install or make once\n'
+  fi
 }
 
 publish_once() {
@@ -305,11 +320,7 @@ publish_once() {
   load_config
   require_tmate
   require_target
-  start_tmate
-
-  connect_command="$(tmate_connect_command)"
-  [[ -n "$connect_command" ]] || die "tmate did not return a connect command"
-  publish_connector "$connect_command"
+  publish_current_connector
 }
 
 main() {

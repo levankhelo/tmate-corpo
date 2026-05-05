@@ -6,7 +6,6 @@ CTL := ./bin/tmate-corpoctl
 
 export USER_MAC
 export USER_COMMAND_PATH
-export REMOTE_INSTALL_WITH_SUDO
 export SKIP_SSH_COPY_ID
 export TMATE_BIN
 export TMATE_SESSION

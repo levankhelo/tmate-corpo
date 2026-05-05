@@ -2,7 +2,7 @@
 
 LABEL="com.tmate-corpo.agent"
 APP_NAME="tmate-corpo"
-DEFAULT_USER_COMMAND_PATH="/usr/local/bin/tmate-corpo"
+DEFAULT_USER_COMMAND_PATH="~/bin/tmate-corpo"
 INSTALL_ROOT="${TMATE_CORPO_HOME:-$HOME/.tmate-corpo}"
 CONFIG_FILE="$INSTALL_ROOT/env"
 LOCAL_CONFIG_FILE="${TMATE_CORPO_LOCAL_CONFIG:-}"
@@ -21,7 +21,6 @@ ENV_TMATE_SOCKET="${TMATE_SOCKET-}"
 ENV_TMATE_REFRESH_SECONDS="${TMATE_REFRESH_SECONDS-}"
 ENV_TMATE_EMPTY_GRACE_SECONDS="${TMATE_EMPTY_GRACE_SECONDS-}"
 ENV_TMATE_RESTART_ON_DISCONNECT="${TMATE_RESTART_ON_DISCONNECT-}"
-ENV_REMOTE_INSTALL_WITH_SUDO="${REMOTE_INSTALL_WITH_SUDO-}"
 ENV_SKIP_SSH_COPY_ID="${SKIP_SSH_COPY_ID-}"
 
 TMATE_BIN="${TMATE_BIN:-}"
@@ -110,7 +109,6 @@ load_config() {
   [[ -n "$ENV_TMATE_REFRESH_SECONDS" ]] && TMATE_REFRESH_SECONDS="$ENV_TMATE_REFRESH_SECONDS"
   [[ -n "$ENV_TMATE_EMPTY_GRACE_SECONDS" ]] && TMATE_EMPTY_GRACE_SECONDS="$ENV_TMATE_EMPTY_GRACE_SECONDS"
   [[ -n "$ENV_TMATE_RESTART_ON_DISCONNECT" ]] && TMATE_RESTART_ON_DISCONNECT="$ENV_TMATE_RESTART_ON_DISCONNECT"
-  [[ -n "$ENV_REMOTE_INSTALL_WITH_SUDO" ]] && REMOTE_INSTALL_WITH_SUDO="$ENV_REMOTE_INSTALL_WITH_SUDO"
   [[ -n "$ENV_SKIP_SSH_COPY_ID" ]] && SKIP_SSH_COPY_ID="$ENV_SKIP_SSH_COPY_ID"
 
   USER_MAC="${USER_MAC:-${FILE_TARGET_MAC:-}}"
@@ -124,7 +122,7 @@ load_config() {
   TMATE_REFRESH_SECONDS="${TMATE_REFRESH_SECONDS:-10}"
   TMATE_EMPTY_GRACE_SECONDS="${TMATE_EMPTY_GRACE_SECONDS:-5}"
   TMATE_RESTART_ON_DISCONNECT="${TMATE_RESTART_ON_DISCONNECT:-1}"
-  REMOTE_INSTALL_WITH_SUDO="${REMOTE_INSTALL_WITH_SUDO:-0}"
+  REMOTE_INSTALL_WITH_SUDO=0
   SKIP_SSH_COPY_ID="${SKIP_SSH_COPY_ID:-0}"
 }
 
@@ -153,7 +151,7 @@ write_config_file() {
     printf 'TMATE_REFRESH_SECONDS=%s\n' "$(single_quote "$TMATE_REFRESH_SECONDS")"
     printf 'TMATE_EMPTY_GRACE_SECONDS=%s\n' "$(single_quote "$TMATE_EMPTY_GRACE_SECONDS")"
     printf 'TMATE_RESTART_ON_DISCONNECT=%s\n' "$(single_quote "$TMATE_RESTART_ON_DISCONNECT")"
-    printf 'REMOTE_INSTALL_WITH_SUDO=%s\n' "$(single_quote "$REMOTE_INSTALL_WITH_SUDO")"
+    printf 'REMOTE_INSTALL_WITH_SUDO=%s\n' "$(single_quote "0")"
     printf 'SKIP_SSH_COPY_ID=%s\n' "$(single_quote "$SKIP_SSH_COPY_ID")"
   } >"$path"
 }
@@ -220,10 +218,10 @@ Remote check output:
 $output
 
 Try:
-  USER_MAC='$FILE_TARGET_MAC' USER_COMMAND_PATH='/usr/local/bin/tmate-corpo' REMOTE_INSTALL_WITH_SUDO=1 make config
+  USER_MAC='$FILE_TARGET_MAC' USER_COMMAND_PATH='~/bin/tmate-corpo' make config
   make install
 
-This path usually requires passwordless sudo on the USER Mac."
+This path is resolved on the USER Mac under that account's home directory."
   fi
 }
 
@@ -239,17 +237,42 @@ target_path_ready_quiet() {
   remote_check_user_command_path check >/dev/null 2>&1
 }
 
+remote_user_command_exists() {
+  require_target
+
+  ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" /bin/bash -s -- "$FILE_TARGET_PATH" <<'REMOTE'
+set -euo pipefail
+
+target="$1"
+
+case "$target" in
+  '~')
+    target="$HOME"
+    ;;
+  '~/'*)
+    target="$HOME/${target#~/}"
+    ;;
+  /*)
+    ;;
+  *)
+    target="$HOME/$target"
+    ;;
+esac
+
+test -x "$target"
+REMOTE
+}
+
 remote_check_user_command_path() {
   local mode="$1"
 
   require_target
 
-  ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" /bin/bash -s -- "$FILE_TARGET_PATH" "$REMOTE_INSTALL_WITH_SUDO" "$mode" <<'REMOTE'
+  ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" /bin/bash -s -- "$FILE_TARGET_PATH" "$mode" <<'REMOTE'
 set -euo pipefail
 
 target="$1"
-use_sudo="$2"
-mode="$3"
+mode="$2"
 
 case "$target" in
   '~')
@@ -270,17 +293,7 @@ dir="$(dirname "$target")"
 printf 'resolved target: %s\n' "$target"
 printf 'resolved dir: %s\n' "$dir"
 printf 'mode: %s\n' "$mode"
-printf 'sudo: %s\n' "$use_sudo"
-
-if [[ "$use_sudo" == "1" ]]; then
-  sudo -n true
-  if [[ "$mode" == "create" ]]; then
-    sudo -n mkdir -p "$dir"
-  fi
-  test -d "$dir" || { printf 'directory does not exist: %s\n' "$dir" >&2; exit 10; }
-  sudo -n test -w "$dir" || { printf 'sudo cannot write directory: %s\n' "$dir" >&2; exit 11; }
-  exit 0
-fi
+printf 'sudo: disabled\n'
 
 if [[ -e "$target" ]]; then
   test -w "$target" || { printf 'file exists but is not writable: %s\n' "$target" >&2; exit 20; }
@@ -386,12 +399,7 @@ publish_connector() {
   write_connector_script "$tmp" "$connect_command"
   target_expr="$(remote_path_expr "$FILE_TARGET_PATH")"
 
-  if [[ "$REMOTE_INSTALL_WITH_SUDO" == "1" ]]; then
-    local remote_tmp="/tmp/tmate-corpo.$$"
-    ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" "target=$target_expr; cat > $(shell_quote "$remote_tmp") && chmod 0755 $(shell_quote "$remote_tmp") && sudo -n mkdir -p \"\$(dirname \"\$target\")\" && sudo -n install -m 0755 $(shell_quote "$remote_tmp") \"\$target\" && rm -f $(shell_quote "$remote_tmp")" <"$tmp" || status=$?
-  else
-    ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" "target=$target_expr; mkdir -p \"\$(dirname \"\$target\")\"; cat > \"\$target\"; chmod 0755 \"\$target\"" <"$tmp" || status=$?
-  fi
+  ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" "target=$target_expr; mkdir -p \"\$(dirname \"\$target\")\"; cat > \"\$target\"; chmod 0755 \"\$target\"" <"$tmp" || status=$?
 
   rm -f "$tmp"
   (( status == 0 )) || return "$status"
