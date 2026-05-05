@@ -5,60 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # shellcheck source=../lib/common.sh
 source "$SCRIPT_DIR/../lib/common.sh"
 
-run_manager() {
-  load_config
-  require_tmate
-  require_target
+load_config
+require_sshd
+require_target
+prepare_userspace_sshd
 
-  mkdir -p "$INSTALL_ROOT" "$LOG_DIR"
+connect_command="$(corpo_ssh_command)"
+publish_connector "$connect_command"
 
-  local last_connect_command=""
-  local saw_client=0
-  local empty_since=0
-
-  log "manager started"
-
-  while true; do
-    if ! tmate_alive; then
-      start_tmate
-      last_connect_command=""
-      saw_client=0
-      empty_since=0
-    fi
-
-    local connect_command
-    connect_command="$(tmate_connect_command || true)"
-
-    if [[ -n "$connect_command" && "$connect_command" != "$last_connect_command" ]]; then
-      if publish_connector "$connect_command"; then
-        last_connect_command="$connect_command"
-      else
-        log "failed to publish connector; will retry"
-      fi
-    fi
-
-    local clients
-    clients="$(tmate_client_count)"
-
-    if [[ "$clients" =~ ^[0-9]+$ ]] && (( clients > 0 )); then
-      saw_client=1
-      empty_since=0
-    elif [[ "$TMATE_RESTART_ON_DISCONNECT" == "1" && "$saw_client" == "1" ]]; then
-      local now
-      now="$(date +%s)"
-
-      if (( empty_since == 0 )); then
-        empty_since="$now"
-      elif (( now - empty_since >= TMATE_EMPTY_GRACE_SECONDS )); then
-        restart_tmate
-        last_connect_command=""
-        saw_client=0
-        empty_since=0
-      fi
-    fi
-
-    sleep "$TMATE_REFRESH_SECONDS"
-  done
-}
-
-run_manager
+log "starting user-space sshd on port $CORPO_SSH_PORT"
+exec "$SSHD_BIN" -D -f "$SSHD_CONFIG" -E "$SSHD_LOG"

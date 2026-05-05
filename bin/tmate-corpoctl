@@ -25,11 +25,9 @@ Usage:
 Environment:
   USER_MAC                    USER Mac SSH target that receives the connector.
   USER_COMMAND_PATH           Command path created on USER Mac. Default: ~/bin/tmate-corpo
-  TMATE_BIN                   Absolute tmate path. Auto-detected during install.
+  CORPO_SSH_PORT              CORPO user-space sshd port. Default: 2222
+  CORPO_SSH_HOST              CORPO LAN host/IP for USER to connect to. Default: auto
   SKIP_SSH_COPY_ID            Do not try ssh-copy-id during install. Default: 0
-  TMATE_REFRESH_SECONDS       Manager loop interval. Default: 10
-  TMATE_EMPTY_GRACE_SECONDS   Seconds after last client leaves before restart. Default: 5
-  TMATE_RESTART_ON_DISCONNECT Restart session after a client disconnects. Default: 1
 
 Examples:
   make config
@@ -142,10 +140,12 @@ configure() {
 
   USER_COMMAND_PATH="$(prompt_default "Command path to create on USER Mac" "${USER_COMMAND_PATH:-$FILE_TARGET_PATH}")"
   FILE_TARGET_PATH="$USER_COMMAND_PATH"
+  CORPO_SSH_PORT="$(prompt_default "CORPO user-space sshd port" "$CORPO_SSH_PORT")"
+  CORPO_SSH_HOST="$(prompt_default "CORPO LAN host/IP for USER to connect to" "$CORPO_SSH_HOST")"
   REMOTE_INSTALL_WITH_SUDO=0
   SKIP_SSH_COPY_ID="$(prompt_yes_no "Skip ssh-copy-id attempts during install?" "$SKIP_SSH_COPY_ID")"
 
-  require_tmate
+  require_sshd
 
   write_local_config
   write_config
@@ -204,9 +204,8 @@ launchctl_bootstrap() {
 publish_current_connector() {
   local connect_command
 
-  start_tmate
-  connect_command="$(tmate_connect_command)"
-  [[ -n "$connect_command" ]] || die "tmate did not return a connect command"
+  prepare_userspace_sshd
+  connect_command="$(corpo_ssh_command)"
   publish_connector "$connect_command"
 }
 
@@ -218,7 +217,7 @@ install_files() {
 
 install_service() {
   require_macos
-  require_tmate
+  require_sshd
   require_target
 
   install_files
@@ -236,7 +235,7 @@ install_service() {
 uninstall_service() {
   require_macos
   launchctl_bootout
-  stop_tmate
+  stop_userspace_sshd
   rm -f "$PLIST_FILE"
   log "uninstalled $LABEL"
 }
@@ -251,7 +250,7 @@ start_service() {
 stop_service() {
   require_macos
   launchctl_bootout
-  stop_tmate
+  stop_userspace_sshd
   log "stopped $LABEL"
 }
 
@@ -265,12 +264,11 @@ service_status() {
     printf 'launchd: stopped\n'
   fi
 
-  if tmate_alive; then
-    printf 'tmate: running\n'
-    printf 'clients: %s\n' "$(tmate_client_count)"
-    printf 'connect: %s\n' "$(tmate_connect_command)"
+  if sshd_alive; then
+    printf 'userspace sshd: running\n'
+    printf 'connect: %s\n' "$(corpo_ssh_command)"
   else
-    printf 'tmate: stopped\n'
+    printf 'userspace sshd: stopped\n'
   fi
 
   printf 'USER Mac command: %s:%s\n' "${FILE_TARGET_MAC:-unset}" "$FILE_TARGET_PATH"
@@ -291,9 +289,12 @@ doctor() {
   printf '  runtime config: %s\n' "$CONFIG_FILE"
   printf '  USER_MAC: %s\n' "${FILE_TARGET_MAC:-unset}"
   printf '  USER_COMMAND_PATH: %s\n' "$FILE_TARGET_PATH"
+  printf '  CORPO_SSH_PORT: %s\n' "$CORPO_SSH_PORT"
+  printf '  CORPO_SSH_HOST: %s\n' "$CORPO_SSH_HOST"
+  printf '  resolved CORPO host: %s\n' "$(detect_corpo_ssh_host)"
   printf '  REMOTE_INSTALL_WITH_SUDO: 0 (forced; sudo install is disabled)\n'
   printf '  SKIP_SSH_COPY_ID: %s\n' "$SKIP_SSH_COPY_ID"
-  printf '  TMATE_BIN: %s\n' "${TMATE_BIN:-unset}"
+  printf '  SSHD_BIN: %s\n' "$SSHD_BIN"
   printf '\n'
 
   require_target
@@ -322,7 +323,7 @@ publish_once() {
   local connect_command
 
   load_config
-  require_tmate
+  require_sshd
   require_target
   publish_current_connector
 }

@@ -7,12 +7,9 @@ CTL := ./bin/tmate-corpoctl
 export USER_MAC
 export USER_COMMAND_PATH
 export SKIP_SSH_COPY_ID
-export TMATE_BIN
-export TMATE_SESSION
-export TMATE_SOCKET
-export TMATE_REFRESH_SECONDS
-export TMATE_EMPTY_GRACE_SECONDS
-export TMATE_RESTART_ON_DISCONNECT
+export CORPO_SSH_PORT
+export CORPO_SSH_HOST
+export SSHD_BIN
 
 help:
 	@$(CTL) help

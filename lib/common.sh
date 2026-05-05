@@ -3,6 +3,7 @@
 LABEL="com.tmate-corpo.agent"
 APP_NAME="tmate-corpo"
 DEFAULT_USER_COMMAND_PATH="~/bin/tmate-corpo"
+DEFAULT_CORPO_SSH_PORT="2222"
 INSTALL_ROOT="${TMATE_CORPO_HOME:-$HOME/.tmate-corpo}"
 CONFIG_FILE="$INSTALL_ROOT/env"
 LOCAL_CONFIG_FILE="${TMATE_CORPO_LOCAL_CONFIG:-}"
@@ -10,28 +11,28 @@ PLIST_FILE="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG_DIR="$INSTALL_ROOT/logs"
 STDOUT_LOG="$LOG_DIR/stdout.log"
 STDERR_LOG="$LOG_DIR/stderr.log"
+SSHD_ROOT="$INSTALL_ROOT/sshd"
+SSHD_CONFIG="$SSHD_ROOT/sshd_config"
+SSHD_HOST_KEY="$SSHD_ROOT/ssh_host_ed25519_key"
+SSHD_AUTHORIZED_KEYS="$SSHD_ROOT/authorized_keys"
+SSHD_PID_FILE="$SSHD_ROOT/sshd.pid"
+SSHD_LOG="$LOG_DIR/sshd.log"
 
 ENV_FILE_TARGET_MAC="${FILE_TARGET_MAC-}"
 ENV_FILE_TARGET_PATH="${FILE_TARGET_PATH-}"
 ENV_USER_MAC="${USER_MAC-}"
 ENV_USER_COMMAND_PATH="${USER_COMMAND_PATH-}"
-ENV_TMATE_BIN="${TMATE_BIN-}"
-ENV_TMATE_SESSION="${TMATE_SESSION-}"
-ENV_TMATE_SOCKET="${TMATE_SOCKET-}"
-ENV_TMATE_REFRESH_SECONDS="${TMATE_REFRESH_SECONDS-}"
-ENV_TMATE_EMPTY_GRACE_SECONDS="${TMATE_EMPTY_GRACE_SECONDS-}"
-ENV_TMATE_RESTART_ON_DISCONNECT="${TMATE_RESTART_ON_DISCONNECT-}"
+ENV_CORPO_SSH_PORT="${CORPO_SSH_PORT-}"
+ENV_CORPO_SSH_HOST="${CORPO_SSH_HOST-}"
+ENV_SSHD_BIN="${SSHD_BIN-}"
 ENV_SKIP_SSH_COPY_ID="${SKIP_SSH_COPY_ID-}"
 
-TMATE_BIN="${TMATE_BIN:-}"
-TMATE_SESSION="${TMATE_SESSION:-tmate-corpo}"
-TMATE_SOCKET="${TMATE_SOCKET:-$INSTALL_ROOT/tmate.sock}"
 FILE_TARGET_PATH="${FILE_TARGET_PATH:-}"
 USER_MAC="${USER_MAC:-${FILE_TARGET_MAC:-}}"
 USER_COMMAND_PATH="${USER_COMMAND_PATH:-}"
-TMATE_REFRESH_SECONDS="${TMATE_REFRESH_SECONDS:-10}"
-TMATE_EMPTY_GRACE_SECONDS="${TMATE_EMPTY_GRACE_SECONDS:-5}"
-TMATE_RESTART_ON_DISCONNECT="${TMATE_RESTART_ON_DISCONNECT:-1}"
+CORPO_SSH_PORT="${CORPO_SSH_PORT:-$DEFAULT_CORPO_SSH_PORT}"
+CORPO_SSH_HOST="${CORPO_SSH_HOST:-auto}"
+SSHD_BIN="${SSHD_BIN:-/usr/sbin/sshd}"
 REMOTE_INSTALL_WITH_SUDO="${REMOTE_INSTALL_WITH_SUDO:-0}"
 SKIP_SSH_COPY_ID="${SKIP_SSH_COPY_ID:-0}"
 
@@ -52,30 +53,9 @@ require_macos() {
   [[ "$(uname -s)" == "Darwin" ]] || die "this service uses launchd and must run on macOS"
 }
 
-require_tmate() {
-  if [[ -n "${TMATE_BIN:-}" && -x "$TMATE_BIN" ]]; then
-    return 0
-  fi
-
-  if have tmate; then
-    TMATE_BIN="$(command -v tmate)"
-    return 0
-  fi
-
-  die "tmate is not installed; install it with: brew install tmate"
-}
-
-tmate_available_quiet() {
-  if [[ -n "${TMATE_BIN:-}" && -x "$TMATE_BIN" ]]; then
-    return 0
-  fi
-
-  if have tmate; then
-    TMATE_BIN="$(command -v tmate)"
-    return 0
-  fi
-
-  return 1
+require_sshd() {
+  [[ -x "$SSHD_BIN" ]] || die "sshd is not available at $SSHD_BIN"
+  have ssh-keygen || die "ssh-keygen is required"
 }
 
 shell_quote() {
@@ -103,12 +83,9 @@ load_config() {
   [[ -n "$ENV_FILE_TARGET_PATH" ]] && FILE_TARGET_PATH="$ENV_FILE_TARGET_PATH"
   [[ -n "$ENV_USER_MAC" ]] && USER_MAC="$ENV_USER_MAC"
   [[ -n "$ENV_USER_COMMAND_PATH" ]] && USER_COMMAND_PATH="$ENV_USER_COMMAND_PATH"
-  [[ -n "$ENV_TMATE_BIN" ]] && TMATE_BIN="$ENV_TMATE_BIN"
-  [[ -n "$ENV_TMATE_SESSION" ]] && TMATE_SESSION="$ENV_TMATE_SESSION"
-  [[ -n "$ENV_TMATE_SOCKET" ]] && TMATE_SOCKET="$ENV_TMATE_SOCKET"
-  [[ -n "$ENV_TMATE_REFRESH_SECONDS" ]] && TMATE_REFRESH_SECONDS="$ENV_TMATE_REFRESH_SECONDS"
-  [[ -n "$ENV_TMATE_EMPTY_GRACE_SECONDS" ]] && TMATE_EMPTY_GRACE_SECONDS="$ENV_TMATE_EMPTY_GRACE_SECONDS"
-  [[ -n "$ENV_TMATE_RESTART_ON_DISCONNECT" ]] && TMATE_RESTART_ON_DISCONNECT="$ENV_TMATE_RESTART_ON_DISCONNECT"
+  [[ -n "$ENV_CORPO_SSH_PORT" ]] && CORPO_SSH_PORT="$ENV_CORPO_SSH_PORT"
+  [[ -n "$ENV_CORPO_SSH_HOST" ]] && CORPO_SSH_HOST="$ENV_CORPO_SSH_HOST"
+  [[ -n "$ENV_SSHD_BIN" ]] && SSHD_BIN="$ENV_SSHD_BIN"
   [[ -n "$ENV_SKIP_SSH_COPY_ID" ]] && SKIP_SSH_COPY_ID="$ENV_SKIP_SSH_COPY_ID"
 
   USER_MAC="${USER_MAC:-${FILE_TARGET_MAC:-}}"
@@ -116,12 +93,9 @@ load_config() {
   FILE_TARGET_MAC="$USER_MAC"
   FILE_TARGET_PATH="${USER_COMMAND_PATH:-$DEFAULT_USER_COMMAND_PATH}"
   USER_COMMAND_PATH="$FILE_TARGET_PATH"
-  TMATE_BIN="${TMATE_BIN:-}"
-  TMATE_SESSION="${TMATE_SESSION:-tmate-corpo}"
-  TMATE_SOCKET="${TMATE_SOCKET:-$INSTALL_ROOT/tmate.sock}"
-  TMATE_REFRESH_SECONDS="${TMATE_REFRESH_SECONDS:-10}"
-  TMATE_EMPTY_GRACE_SECONDS="${TMATE_EMPTY_GRACE_SECONDS:-5}"
-  TMATE_RESTART_ON_DISCONNECT="${TMATE_RESTART_ON_DISCONNECT:-1}"
+  CORPO_SSH_PORT="${CORPO_SSH_PORT:-$DEFAULT_CORPO_SSH_PORT}"
+  CORPO_SSH_HOST="${CORPO_SSH_HOST:-auto}"
+  SSHD_BIN="${SSHD_BIN:-/usr/sbin/sshd}"
   REMOTE_INSTALL_WITH_SUDO=0
   SKIP_SSH_COPY_ID="${SKIP_SSH_COPY_ID:-0}"
 }
@@ -145,12 +119,9 @@ write_config_file() {
   {
     printf 'USER_MAC=%s\n' "$(single_quote "${USER_MAC:-${FILE_TARGET_MAC:-}}")"
     printf 'USER_COMMAND_PATH=%s\n' "$(single_quote "${USER_COMMAND_PATH:-$FILE_TARGET_PATH}")"
-    printf 'TMATE_BIN=%s\n' "$(single_quote "$TMATE_BIN")"
-    printf 'TMATE_SESSION=%s\n' "$(single_quote "$TMATE_SESSION")"
-    printf 'TMATE_SOCKET=%s\n' "$(single_quote "$TMATE_SOCKET")"
-    printf 'TMATE_REFRESH_SECONDS=%s\n' "$(single_quote "$TMATE_REFRESH_SECONDS")"
-    printf 'TMATE_EMPTY_GRACE_SECONDS=%s\n' "$(single_quote "$TMATE_EMPTY_GRACE_SECONDS")"
-    printf 'TMATE_RESTART_ON_DISCONNECT=%s\n' "$(single_quote "$TMATE_RESTART_ON_DISCONNECT")"
+    printf 'CORPO_SSH_PORT=%s\n' "$(single_quote "$CORPO_SSH_PORT")"
+    printf 'CORPO_SSH_HOST=%s\n' "$(single_quote "$CORPO_SSH_HOST")"
+    printf 'SSHD_BIN=%s\n' "$(single_quote "$SSHD_BIN")"
     printf 'REMOTE_INSTALL_WITH_SUDO=%s\n' "$(single_quote "0")"
     printf 'SKIP_SSH_COPY_ID=%s\n' "$(single_quote "$SKIP_SSH_COPY_ID")"
   } >"$path"
@@ -381,6 +352,110 @@ esac
 REMOTE
 }
 
+detect_corpo_ssh_host() {
+  if [[ -n "${CORPO_SSH_HOST:-}" && "$CORPO_SSH_HOST" != "auto" ]]; then
+    printf '%s\n' "$CORPO_SSH_HOST"
+    return 0
+  fi
+
+  local iface ip
+  iface="$(route get default 2>/dev/null | awk '/interface:/{print $2; exit}' || true)"
+
+  if [[ -n "$iface" ]]; then
+    ip="$(ipconfig getifaddr "$iface" 2>/dev/null || true)"
+    if [[ -n "$ip" ]]; then
+      printf '%s\n' "$ip"
+      return 0
+    fi
+  fi
+
+  printf '%s.local\n' "$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
+}
+
+fetch_user_public_key() {
+  require_target
+
+  ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" /bin/bash -s <<'REMOTE'
+set -euo pipefail
+
+for key in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_ecdsa.pub" "$HOME/.ssh/id_rsa.pub"; do
+  if [[ -r "$key" ]]; then
+    cat "$key"
+    exit 0
+  fi
+done
+
+printf 'no public SSH key found in ~/.ssh/id_ed25519.pub, ~/.ssh/id_ecdsa.pub, or ~/.ssh/id_rsa.pub\n' >&2
+exit 1
+REMOTE
+}
+
+write_sshd_config() {
+  mkdir -p "$SSHD_ROOT" "$LOG_DIR"
+
+  cat >"$SSHD_CONFIG" <<EOF
+Port $CORPO_SSH_PORT
+ListenAddress 0.0.0.0
+Protocol 2
+HostKey $SSHD_HOST_KEY
+PidFile $SSHD_PID_FILE
+AuthorizedKeysFile $SSHD_AUTHORIZED_KEYS
+PasswordAuthentication no
+ChallengeResponseAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin no
+UsePAM no
+StrictModes no
+X11Forwarding no
+AllowTcpForwarding yes
+PermitTTY yes
+PrintMotd no
+PrintLastLog no
+Subsystem sftp /usr/libexec/sftp-server
+EOF
+
+  chmod 0600 "$SSHD_CONFIG"
+}
+
+prepare_userspace_sshd() {
+  require_sshd
+  require_target
+
+  mkdir -p "$SSHD_ROOT" "$LOG_DIR"
+  chmod 0700 "$SSHD_ROOT"
+
+  if [[ ! -f "$SSHD_HOST_KEY" ]]; then
+    ssh-keygen -q -t ed25519 -N '' -f "$SSHD_HOST_KEY"
+  fi
+
+  fetch_user_public_key >"$SSHD_AUTHORIZED_KEYS"
+  chmod 0600 "$SSHD_AUTHORIZED_KEYS"
+  write_sshd_config
+}
+
+sshd_alive() {
+  [[ -f "$SSHD_PID_FILE" ]] || return 1
+
+  local pid
+  pid="$(cat "$SSHD_PID_FILE" 2>/dev/null || true)"
+  [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1
+}
+
+stop_userspace_sshd() {
+  if sshd_alive; then
+    kill "$(cat "$SSHD_PID_FILE")" >/dev/null 2>&1 || true
+  fi
+  rm -f "$SSHD_PID_FILE"
+}
+
+corpo_ssh_command() {
+  local host
+  host="$(detect_corpo_ssh_host)"
+
+  printf 'ssh -p %s -o StrictHostKeyChecking=accept-new %s@%s' "$CORPO_SSH_PORT" "$(whoami)" "$host"
+}
+
 remote_check_user_command_path() {
   local mode="$1"
 
@@ -427,61 +502,6 @@ test -w "$dir" || { printf 'directory is not writable: %s\n' "$dir" >&2; exit 22
 REMOTE
 }
 
-tmate_alive() {
-  tmate_available_quiet || return 1
-  [[ -S "$TMATE_SOCKET" ]] && "$TMATE_BIN" -S "$TMATE_SOCKET" has-session -t "$TMATE_SESSION" >/dev/null 2>&1
-}
-
-start_tmate() {
-  mkdir -p "$INSTALL_ROOT"
-
-  if [[ -e "$TMATE_SOCKET" ]] && ! "$TMATE_BIN" -S "$TMATE_SOCKET" list-sessions >/dev/null 2>&1; then
-    rm -f "$TMATE_SOCKET"
-  fi
-
-  if tmate_alive; then
-    return 0
-  fi
-
-  log "starting tmate session '$TMATE_SESSION'"
-  "$TMATE_BIN" -S "$TMATE_SOCKET" new-session -d -s "$TMATE_SESSION"
-  "$TMATE_BIN" -S "$TMATE_SOCKET" wait tmate-ready
-}
-
-stop_tmate() {
-  if ! tmate_available_quiet; then
-    rm -f "$TMATE_SOCKET"
-    return 0
-  fi
-
-  if [[ -S "$TMATE_SOCKET" ]]; then
-    "$TMATE_BIN" -S "$TMATE_SOCKET" kill-session -t "$TMATE_SESSION" >/dev/null 2>&1 || true
-    "$TMATE_BIN" -S "$TMATE_SOCKET" kill-server >/dev/null 2>&1 || true
-  fi
-
-  rm -f "$TMATE_SOCKET"
-}
-
-restart_tmate() {
-  log "restarting tmate session '$TMATE_SESSION'"
-  stop_tmate
-  start_tmate
-}
-
-tmate_connect_command() {
-  "$TMATE_BIN" -S "$TMATE_SOCKET" display-message -p '#{tmate_ssh}' 2>/dev/null | sed '/^[[:space:]]*$/d' | head -n 1
-}
-
-tmate_client_count() {
-  if ! tmate_alive; then
-    printf '0\n'
-    return 0
-  fi
-
-  "$TMATE_BIN" -S "$TMATE_SOCKET" list-clients 2>/dev/null | wc -l | tr -d '[:space:]'
-  printf '\n'
-}
-
 write_connector_script() {
   local path="$1"
   local connect_command="$2"
@@ -490,16 +510,16 @@ write_connector_script() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-TMATE_CONNECT_COMMAND=$(single_quote "$connect_command")
+CONNECT_COMMAND=$(single_quote "$connect_command")
 
 if [[ "\${1:-}" == "--print" ]]; then
-  printf '%s\n' "\$TMATE_CONNECT_COMMAND"
+  printf '%s\n' "\$CONNECT_COMMAND"
   exit 0
 fi
 
-# tmate prints a shell command such as: ssh abc@nyc1.tmate.io
+# The connector stores the current direct LAN SSH command.
 # shellcheck disable=SC2206
-cmd=( \$TMATE_CONNECT_COMMAND )
+cmd=( \$CONNECT_COMMAND )
 exec "\${cmd[@]}" "\$@"
 EOF
   chmod 0755 "$path"
