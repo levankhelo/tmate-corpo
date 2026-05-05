@@ -250,7 +250,7 @@ case "$target" in
     target="$HOME"
     ;;
   '~/'*)
-    target="$HOME/${target#~/}"
+    target="$HOME/${target#\~/}"
     ;;
   /*)
     ;;
@@ -276,7 +276,7 @@ case "$target" in
     target="$HOME"
     ;;
   '~/'*)
-    target="$HOME/${target#~/}"
+    target="$HOME/${target#\~/}"
     ;;
   /*)
     ;;
@@ -322,7 +322,7 @@ case "$target" in
     target="$HOME"
     ;;
   '~/'*)
-    target="$HOME/${target#~/}"
+    target="$HOME/${target#\~/}"
     ;;
   /*)
     ;;
@@ -434,15 +434,39 @@ publish_connector() {
   require_target
 
   local connect_command="$1"
-  local target_expr
+  local target_arg
   local tmp
   local status=0
 
   tmp="$(mktemp "${TMPDIR:-/tmp}/tmate-corpo.XXXXXX")"
   write_connector_script "$tmp" "$connect_command"
-  target_expr="$(remote_path_expr "$FILE_TARGET_PATH")"
+  target_arg="$(single_quote "$FILE_TARGET_PATH")"
 
-  ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" "target=$target_expr; mkdir -p \"\$(dirname \"\$target\")\"; cat > \"\$target\"; chmod 0755 \"\$target\"; test -x \"\$target\"; ls -l \"\$target\"" <"$tmp" || status=$?
+  ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" "
+set -euo pipefail
+
+target=$target_arg
+
+case \"\$target\" in
+  '~')
+    target=\"\$HOME\"
+    ;;
+  '~/'*)
+    target=\"\$HOME/\${target#\\~/}\"
+    ;;
+  /*)
+    ;;
+  *)
+    target=\"\$HOME/\$target\"
+    ;;
+esac
+
+mkdir -p \"\$(dirname \"\$target\")\"
+cat > \"\$target\"
+chmod 0755 \"\$target\"
+test -x \"\$target\"
+ls -l \"\$target\"
+" <"$tmp" || status=$?
 
   rm -f "$tmp"
   (( status == 0 )) || return "$status"
