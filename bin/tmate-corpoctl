@@ -313,6 +313,9 @@ doctor() {
     printf 'Missing: USER Mac command has not been published yet. Run: make install or make once\n'
   fi
   remote_user_command_info
+
+  printf '\nChecking USER Mac PATH setup...\n'
+  remote_ensure_user_command_path_on_path
 }
 
 publish_once() {

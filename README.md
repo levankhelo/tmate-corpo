@@ -86,7 +86,7 @@ Then install and start the LaunchAgent:
 make install
 ```
 
-`make install` creates `~/bin` on the USER Mac if needed and writes the executable connector at `~/bin/tmate-corpo` before it returns. The background service keeps that file updated when the CORPO tmate session changes.
+`make install` creates `~/bin` on the USER Mac if needed, writes the executable connector at `~/bin/tmate-corpo`, runs `chmod 0755`, and adds `$HOME/bin` to the USER Mac zsh startup files before it returns. The background service keeps that file updated when the CORPO tmate session changes.
 
 By default, the USER Mac command is written to:
 
@@ -100,7 +100,13 @@ That path is resolved on the USER Mac under the SSH user's home directory and do
 USER_COMMAND_PATH='~/bin/tmate-corpo' make config
 ```
 
-If `tmate-corpo` is not found on the USER Mac after install, add `~/bin` to that user's `PATH`, or run it with the full path:
+If `tmate-corpo` is not found in an already-open USER Mac terminal, open a new terminal or run:
+
+```bash
+source ~/.zshrc
+```
+
+You can always run it with the full path:
 
 ```bash
 ~/bin/tmate-corpo

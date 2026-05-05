@@ -297,12 +297,87 @@ else
   printf 'dir exists: no\n'
 fi
 
+case ":$PATH:" in
+  *":$dir:"*)
+    printf 'dir on PATH: yes\n'
+    ;;
+  *)
+    printf 'dir on PATH: no\n'
+    ;;
+esac
+
 if [[ -e "$target" ]]; then
   printf 'file exists: yes\n'
   ls -l "$target"
 else
   printf 'file exists: no\n'
 fi
+REMOTE
+}
+
+remote_ensure_user_command_path_on_path() {
+  require_target
+
+  ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" /bin/bash -s -- "$FILE_TARGET_PATH" <<'REMOTE'
+set -euo pipefail
+
+target="$1"
+
+case "$target" in
+  '~')
+    target="$HOME"
+    ;;
+  '~/'*)
+    target="$HOME/${target#\~/}"
+    ;;
+  /*)
+    ;;
+  *)
+    target="$HOME/$target"
+    ;;
+esac
+
+dir="$(dirname "$target")"
+
+if [[ "$dir" != "$HOME/bin" ]]; then
+  printf 'PATH update skipped: command dir is %s, not %s\n' "$dir" "$HOME/bin"
+  exit 0
+fi
+
+block_start="# >>> tmate-corpo PATH >>>"
+block_end="# <<< tmate-corpo PATH <<<"
+path_line='export PATH="$HOME/bin:$PATH"'
+
+ensure_file_has_path_block() {
+  local file="$1"
+
+  touch "$file"
+
+  if grep -Fq "$block_start" "$file"; then
+    printf 'PATH already managed in %s\n' "$file"
+    return 0
+  fi
+
+  {
+    printf '\n%s\n' "$block_start"
+    printf '%s\n' "$path_line"
+    printf '%s\n' "$block_end"
+  } >>"$file"
+
+  printf 'Added PATH update to %s\n' "$file"
+}
+
+ensure_file_has_path_block "$HOME/.zshrc"
+ensure_file_has_path_block "$HOME/.zprofile"
+
+case ":$PATH:" in
+  *":$dir:"*)
+    printf 'Current non-interactive PATH already contains %s\n' "$dir"
+    ;;
+  *)
+    printf 'Future zsh sessions will include %s after opening a new terminal or running: source ~/.zshrc\n' "$dir"
+    ;;
+esac
 REMOTE
 }
 
@@ -475,6 +550,8 @@ ls -l \"\$target\"
     remote_user_command_info >&2 || true
     return 1
   fi
+
+  remote_ensure_user_command_path_on_path
 
   log "published $APP_NAME connector to $FILE_TARGET_MAC:$FILE_TARGET_PATH"
 }
