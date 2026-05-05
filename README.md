@@ -144,7 +144,7 @@ make doctor
 If `~/bin/tmate-corpo` is missing on the USER Mac but the service is configured, republish the current connector:
 
 ```bash
-make once
+make publish
 ```
 
 For the default USER home setup:

@@ -263,6 +263,49 @@ test -x "$target"
 REMOTE
 }
 
+remote_user_command_info() {
+  require_target
+
+  ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" /bin/bash -s -- "$FILE_TARGET_PATH" <<'REMOTE'
+set -euo pipefail
+
+target="$1"
+
+case "$target" in
+  '~')
+    target="$HOME"
+    ;;
+  '~/'*)
+    target="$HOME/${target#~/}"
+    ;;
+  /*)
+    ;;
+  *)
+    target="$HOME/$target"
+    ;;
+esac
+
+dir="$(dirname "$target")"
+
+printf 'resolved target: %s\n' "$target"
+printf 'resolved dir: %s\n' "$dir"
+
+if [[ -d "$dir" ]]; then
+  printf 'dir exists: yes\n'
+  ls -ld "$dir"
+else
+  printf 'dir exists: no\n'
+fi
+
+if [[ -e "$target" ]]; then
+  printf 'file exists: yes\n'
+  ls -l "$target"
+else
+  printf 'file exists: no\n'
+fi
+REMOTE
+}
+
 remote_check_user_command_path() {
   local mode="$1"
 
@@ -399,10 +442,15 @@ publish_connector() {
   write_connector_script "$tmp" "$connect_command"
   target_expr="$(remote_path_expr "$FILE_TARGET_PATH")"
 
-  ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" "target=$target_expr; mkdir -p \"\$(dirname \"\$target\")\"; cat > \"\$target\"; chmod 0755 \"\$target\"" <"$tmp" || status=$?
+  ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" "target=$target_expr; mkdir -p \"\$(dirname \"\$target\")\"; cat > \"\$target\"; chmod 0755 \"\$target\"; test -x \"\$target\"; ls -l \"\$target\"" <"$tmp" || status=$?
 
   rm -f "$tmp"
   (( status == 0 )) || return "$status"
+
+  if ! remote_user_command_exists; then
+    remote_user_command_info >&2 || true
+    return 1
+  fi
 
   log "published $APP_NAME connector to $FILE_TARGET_MAC:$FILE_TARGET_PATH"
 }

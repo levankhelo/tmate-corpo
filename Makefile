@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: help config install start stop restart status doctor logs once uninstall check
+.PHONY: help config install start stop restart status doctor logs once publish uninstall check
 
 CTL := ./bin/tmate-corpoctl
 
@@ -43,6 +43,8 @@ logs:
 
 once:
 	@$(CTL) once
+
+publish: once
 
 uninstall:
 	@$(CTL) uninstall
