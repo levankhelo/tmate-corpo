@@ -92,16 +92,16 @@ By default, the USER Mac command is written to:
 /usr/local/bin/tmate-corpo
 ```
 
-If that path is not writable on the USER Mac, install into the user's home directory:
+That path usually requires passwordless sudo for the USER Mac account. Configure with:
 
 ```bash
-USER_COMMAND_PATH='~/bin/tmate-corpo' make config
+USER_COMMAND_PATH='/usr/local/bin/tmate-corpo' REMOTE_INSTALL_WITH_SUDO=1 make config
 ```
 
-If you want to install into a privileged path on the USER Mac, configure passwordless sudo for that USER Mac account and run:
+If you want a different location, set another absolute writable path on the USER Mac:
 
 ```bash
-REMOTE_INSTALL_WITH_SUDO=1 make config
+USER_COMMAND_PATH='/some/writable/path/tmate-corpo' make config
 ```
 
 ## Use
@@ -123,12 +123,30 @@ tmate-corpo --print
 ```bash
 make config
 make status
+make doctor
 make logs
 make restart
 make stop
 make start
 make uninstall
 ```
+
+## Troubleshooting
+
+If install fails with a USER Mac path error, first inspect the loaded config and remote path check:
+
+```bash
+make doctor
+```
+
+For the default `/usr/local/bin/tmate-corpo` setup, use passwordless sudo on the USER Mac:
+
+```bash
+USER_MAC=macmini USER_COMMAND_PATH='/usr/local/bin/tmate-corpo' REMOTE_INSTALL_WITH_SUDO=1 make config
+make install
+```
+
+`make doctor` prints the resolved path on the USER Mac and reports whether the CORPO Mac can create or write it.
 
 ## Files
 

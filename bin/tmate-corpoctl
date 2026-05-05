@@ -18,6 +18,7 @@ Usage:
   make stop
   make restart
   make status
+  make doctor
   make logs
   make uninstall
 
@@ -35,7 +36,7 @@ Examples:
   make config
   make install
   USER_MAC=alex@mac-mini.local make install
-  USER_MAC=alex@mac-mini.local USER_COMMAND_PATH='~/bin/tmate-corpo' make install
+  USER_MAC=alex@mac-mini.local USER_COMMAND_PATH='/usr/local/bin/tmate-corpo' REMOTE_INSTALL_WITH_SUDO=1 make install
   USER_MAC=alex@mac-mini.local REMOTE_INSTALL_WITH_SUDO=1 make install
 EOF
 }
@@ -115,9 +116,9 @@ check_config_access() {
     else
       printf 'Issue: cannot write %s on %s.\n' "$FILE_TARGET_PATH" "$FILE_TARGET_MAC"
       printf 'Suggested steps:\n'
-      printf '  1. Use a user-writable path: USER_COMMAND_PATH='\''~/bin/tmate-corpo'\'' make config\n'
-      printf '  2. Or create and permit a bin dir on USER Mac: ssh %s '\''mkdir -p ~/bin'\''\n' "$FILE_TARGET_MAC"
-      printf '  3. Or configure passwordless sudo and set REMOTE_INSTALL_WITH_SUDO=1.\n'
+      printf '  1. Configure passwordless sudo on USER Mac and set REMOTE_INSTALL_WITH_SUDO=1.\n'
+      printf '  2. Re-run: USER_COMMAND_PATH='\''/usr/local/bin/tmate-corpo'\'' REMOTE_INSTALL_WITH_SUDO=1 make config\n'
+      printf '  3. Or choose another writable absolute path on USER Mac.\n'
     fi
   fi
 
@@ -274,6 +275,30 @@ show_logs() {
   tail -n 80 -f "$STDOUT_LOG" "$STDERR_LOG"
 }
 
+doctor() {
+  load_config
+
+  printf 'Loaded config:\n'
+  printf '  local config: %s\n' "${LOCAL_CONFIG_FILE:-unset}"
+  printf '  runtime config: %s\n' "$CONFIG_FILE"
+  printf '  USER_MAC: %s\n' "${FILE_TARGET_MAC:-unset}"
+  printf '  USER_COMMAND_PATH: %s\n' "$FILE_TARGET_PATH"
+  printf '  REMOTE_INSTALL_WITH_SUDO: %s\n' "$REMOTE_INSTALL_WITH_SUDO"
+  printf '  SKIP_SSH_COPY_ID: %s\n' "$SKIP_SSH_COPY_ID"
+  printf '  TMATE_BIN: %s\n' "${TMATE_BIN:-unset}"
+  printf '\n'
+
+  require_target
+
+  printf 'Checking SSH key login...\n'
+  ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" true
+  printf 'OK: SSH key login works.\n\n'
+
+  printf 'Checking USER Mac command path with create mode...\n'
+  remote_check_user_command_path create
+  printf 'OK: USER Mac command path is writable.\n'
+}
+
 publish_once() {
   local connect_command
 
@@ -317,6 +342,9 @@ main() {
       ;;
     status)
       service_status
+      ;;
+    doctor)
+      doctor
       ;;
     logs)
       show_logs
