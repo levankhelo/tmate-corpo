@@ -8,7 +8,7 @@ export USER_MAC
 export USER_COMMAND_PATH
 export SKIP_SSH_COPY_ID
 export CORPO_SSH_PORT
-export CORPO_SSH_HOST
+export USER_REVERSE_PORT
 export SSHD_BIN
 
 help:

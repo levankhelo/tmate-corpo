@@ -4,6 +4,7 @@ LABEL="com.tmate-corpo.agent"
 APP_NAME="tmate-corpo"
 DEFAULT_USER_COMMAND_PATH="~/bin/tmate-corpo"
 DEFAULT_CORPO_SSH_PORT="2222"
+DEFAULT_USER_REVERSE_PORT="2223"
 INSTALL_ROOT="${TMATE_CORPO_HOME:-$HOME/.tmate-corpo}"
 CONFIG_FILE="$INSTALL_ROOT/env"
 LOCAL_CONFIG_FILE="${TMATE_CORPO_LOCAL_CONFIG:-}"
@@ -17,13 +18,15 @@ SSHD_HOST_KEY="$SSHD_ROOT/ssh_host_ed25519_key"
 SSHD_AUTHORIZED_KEYS="$SSHD_ROOT/authorized_keys"
 SSHD_PID_FILE="$SSHD_ROOT/sshd.pid"
 SSHD_LOG="$LOG_DIR/sshd.log"
+REVERSE_TUNNEL_PID_FILE="$INSTALL_ROOT/reverse-tunnel.pid"
+REVERSE_TUNNEL_LOG="$LOG_DIR/reverse-tunnel.log"
 
 ENV_FILE_TARGET_MAC="${FILE_TARGET_MAC-}"
 ENV_FILE_TARGET_PATH="${FILE_TARGET_PATH-}"
 ENV_USER_MAC="${USER_MAC-}"
 ENV_USER_COMMAND_PATH="${USER_COMMAND_PATH-}"
 ENV_CORPO_SSH_PORT="${CORPO_SSH_PORT-}"
-ENV_CORPO_SSH_HOST="${CORPO_SSH_HOST-}"
+ENV_USER_REVERSE_PORT="${USER_REVERSE_PORT-}"
 ENV_SSHD_BIN="${SSHD_BIN-}"
 ENV_SKIP_SSH_COPY_ID="${SKIP_SSH_COPY_ID-}"
 
@@ -31,7 +34,7 @@ FILE_TARGET_PATH="${FILE_TARGET_PATH:-}"
 USER_MAC="${USER_MAC:-${FILE_TARGET_MAC:-}}"
 USER_COMMAND_PATH="${USER_COMMAND_PATH:-}"
 CORPO_SSH_PORT="${CORPO_SSH_PORT:-$DEFAULT_CORPO_SSH_PORT}"
-CORPO_SSH_HOST="${CORPO_SSH_HOST:-auto}"
+USER_REVERSE_PORT="${USER_REVERSE_PORT:-$DEFAULT_USER_REVERSE_PORT}"
 SSHD_BIN="${SSHD_BIN:-/usr/sbin/sshd}"
 REMOTE_INSTALL_WITH_SUDO="${REMOTE_INSTALL_WITH_SUDO:-0}"
 SKIP_SSH_COPY_ID="${SKIP_SSH_COPY_ID:-0}"
@@ -84,7 +87,7 @@ load_config() {
   [[ -n "$ENV_USER_MAC" ]] && USER_MAC="$ENV_USER_MAC"
   [[ -n "$ENV_USER_COMMAND_PATH" ]] && USER_COMMAND_PATH="$ENV_USER_COMMAND_PATH"
   [[ -n "$ENV_CORPO_SSH_PORT" ]] && CORPO_SSH_PORT="$ENV_CORPO_SSH_PORT"
-  [[ -n "$ENV_CORPO_SSH_HOST" ]] && CORPO_SSH_HOST="$ENV_CORPO_SSH_HOST"
+  [[ -n "$ENV_USER_REVERSE_PORT" ]] && USER_REVERSE_PORT="$ENV_USER_REVERSE_PORT"
   [[ -n "$ENV_SSHD_BIN" ]] && SSHD_BIN="$ENV_SSHD_BIN"
   [[ -n "$ENV_SKIP_SSH_COPY_ID" ]] && SKIP_SSH_COPY_ID="$ENV_SKIP_SSH_COPY_ID"
 
@@ -94,7 +97,7 @@ load_config() {
   FILE_TARGET_PATH="${USER_COMMAND_PATH:-$DEFAULT_USER_COMMAND_PATH}"
   USER_COMMAND_PATH="$FILE_TARGET_PATH"
   CORPO_SSH_PORT="${CORPO_SSH_PORT:-$DEFAULT_CORPO_SSH_PORT}"
-  CORPO_SSH_HOST="${CORPO_SSH_HOST:-auto}"
+  USER_REVERSE_PORT="${USER_REVERSE_PORT:-$DEFAULT_USER_REVERSE_PORT}"
   SSHD_BIN="${SSHD_BIN:-/usr/sbin/sshd}"
   REMOTE_INSTALL_WITH_SUDO=0
   SKIP_SSH_COPY_ID="${SKIP_SSH_COPY_ID:-0}"
@@ -120,7 +123,7 @@ write_config_file() {
     printf 'USER_MAC=%s\n' "$(single_quote "${USER_MAC:-${FILE_TARGET_MAC:-}}")"
     printf 'USER_COMMAND_PATH=%s\n' "$(single_quote "${USER_COMMAND_PATH:-$FILE_TARGET_PATH}")"
     printf 'CORPO_SSH_PORT=%s\n' "$(single_quote "$CORPO_SSH_PORT")"
-    printf 'CORPO_SSH_HOST=%s\n' "$(single_quote "$CORPO_SSH_HOST")"
+    printf 'USER_REVERSE_PORT=%s\n' "$(single_quote "$USER_REVERSE_PORT")"
     printf 'SSHD_BIN=%s\n' "$(single_quote "$SSHD_BIN")"
     printf 'REMOTE_INSTALL_WITH_SUDO=%s\n' "$(single_quote "0")"
     printf 'SKIP_SSH_COPY_ID=%s\n' "$(single_quote "$SKIP_SSH_COPY_ID")"
@@ -352,26 +355,6 @@ esac
 REMOTE
 }
 
-detect_corpo_ssh_host() {
-  if [[ -n "${CORPO_SSH_HOST:-}" && "$CORPO_SSH_HOST" != "auto" ]]; then
-    printf '%s\n' "$CORPO_SSH_HOST"
-    return 0
-  fi
-
-  local iface ip
-  iface="$(route get default 2>/dev/null | awk '/interface:/{print $2; exit}' || true)"
-
-  if [[ -n "$iface" ]]; then
-    ip="$(ipconfig getifaddr "$iface" 2>/dev/null || true)"
-    if [[ -n "$ip" ]]; then
-      printf '%s\n' "$ip"
-      return 0
-    fi
-  fi
-
-  printf '%s.local\n' "$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
-}
-
 fetch_user_public_key() {
   require_target
 
@@ -395,7 +378,7 @@ write_sshd_config() {
 
   cat >"$SSHD_CONFIG" <<EOF
 Port $CORPO_SSH_PORT
-ListenAddress 0.0.0.0
+ListenAddress 127.0.0.1
 Protocol 2
 HostKey $SSHD_HOST_KEY
 PidFile $SSHD_PID_FILE
@@ -450,10 +433,54 @@ stop_userspace_sshd() {
 }
 
 corpo_ssh_command() {
-  local host
-  host="$(detect_corpo_ssh_host)"
+  printf 'ssh -p %s -o StrictHostKeyChecking=accept-new %s@127.0.0.1' "$USER_REVERSE_PORT" "$(whoami)"
+}
 
-  printf 'ssh -p %s -o StrictHostKeyChecking=accept-new %s@%s' "$CORPO_SSH_PORT" "$(whoami)" "$host"
+reverse_tunnel_alive() {
+  [[ -f "$REVERSE_TUNNEL_PID_FILE" ]] || return 1
+
+  local pid
+  pid="$(cat "$REVERSE_TUNNEL_PID_FILE" 2>/dev/null || true)"
+  [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1
+}
+
+stop_reverse_tunnel() {
+  if reverse_tunnel_alive; then
+    kill "$(cat "$REVERSE_TUNNEL_PID_FILE")" >/dev/null 2>&1 || true
+  fi
+  rm -f "$REVERSE_TUNNEL_PID_FILE"
+}
+
+start_reverse_tunnel() {
+  require_target
+
+  if reverse_tunnel_alive; then
+    return 0
+  fi
+
+  mkdir -p "$INSTALL_ROOT" "$LOG_DIR"
+  rm -f "$REVERSE_TUNNEL_PID_FILE"
+
+  log "starting reverse SSH tunnel on USER 127.0.0.1:$USER_REVERSE_PORT -> CORPO 127.0.0.1:$CORPO_SSH_PORT"
+
+  ssh \
+    -N \
+    -T \
+    -o BatchMode=yes \
+    -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=10 \
+    -o ServerAliveCountMax=3 \
+    -R "127.0.0.1:$USER_REVERSE_PORT:127.0.0.1:$CORPO_SSH_PORT" \
+    "$FILE_TARGET_MAC" \
+    >"$REVERSE_TUNNEL_LOG" 2>&1 &
+
+  printf '%s\n' "$!" >"$REVERSE_TUNNEL_PID_FILE"
+
+  sleep 1
+  if ! reverse_tunnel_alive; then
+    cat "$REVERSE_TUNNEL_LOG" >&2 || true
+    die "reverse SSH tunnel failed to start"
+  fi
 }
 
 remote_check_user_command_path() {

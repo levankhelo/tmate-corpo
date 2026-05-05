@@ -4,11 +4,11 @@
 
 The goal of this spike is to make CORPO Macs, where normal macOS Remote Login or inbound SSH may be disabled, reachable from a personal USER Mac over the same LAN with minimum latency.
 
-Instead of `tmate`, this branch runs a private user-space `sshd` on the CORPO Mac on a high port, such as `2222`. That bypasses the macOS system SSH service while still letting the USER connect with normal `ssh`.
+Instead of `tmate`, this branch runs a private user-space `sshd` bound to `127.0.0.1` on the CORPO Mac, then opens a reverse SSH tunnel from CORPO to USER. That avoids inbound connections to CORPO while still letting the USER connect with normal `ssh`.
 
 The USER Mac must be reachable from the CORPO Mac over the same LAN with Remote Login enabled, because the CORPO Mac uses SSH only to publish or refresh the small `tmate-corpo` connector command on the USER Mac. After that, the USER connects back into the CORPO Mac by running `tmate-corpo` from their personal machine.
 
-`tmate-corpo` runs on the CORPO Mac. It keeps a background CORPO-owned `sshd` running and publishes a simple `tmate-corpo` command to the USER Mac over SSH. The generated USER command runs direct LAN SSH back to CORPO.
+`tmate-corpo` runs on the CORPO Mac. It keeps a background CORPO-owned `sshd` plus reverse tunnel running and publishes a simple `tmate-corpo` command to the USER Mac over SSH. The generated USER command connects to `127.0.0.1:USER_REVERSE_PORT` on the USER Mac, which forwards over the tunnel into CORPO.
 
 ## Architecture
 
@@ -20,11 +20,13 @@ flowchart LR
     makeInstall["make install"]
     launchd["launchd service   com.tmate-corpo.agent"]
     service["bin/tmate-corpo-service"]
-    sshd["user-space sshd   port CORPO_SSH_PORT"]
+    sshd["user-space sshd   127.0.0.1:CORPO_SSH_PORT"]
+    tunnel["reverse SSH tunnel"]
   end
 
   subgraph USER["USER Mac"]
     remoteLogin["Remote Login enabled"]
+    reversePort["127.0.0.1:USER_REVERSE_PORT"]
     command["tmate-corpo command   USER_COMMAND_PATH"]
     userRun["USER runs:   tmate-corpo"]
   end
@@ -35,9 +37,12 @@ flowchart LR
   makeInstall --> launchd
   launchd --> service
   service --> sshd
+  service -->|"ssh -R"| tunnel
+  tunnel --> reversePort
   service -->|"SSH writes updated connector"| command
   userRun --> command
-  command -->|"ssh -p CORPO_SSH_PORT"| sshd
+  command -->|"ssh -p USER_REVERSE_PORT 127.0.0.1"| reversePort
+  reversePort --> sshd
 ```
 
 Run `make config`, `make install`, and service management commands on the CORPO Mac. Run only the generated `tmate-corpo` command on the USER Mac.
@@ -51,7 +56,7 @@ Run `make config`, `make install`, and service management commands on the CORPO 
 xcode-select --install
 ```
 
-- Built-in `/usr/sbin/sshd` and `ssh-keygen` available on the CORPO Mac.
+- Built-in `/usr/sbin/sshd`, `ssh`, and `ssh-keygen` available on the CORPO Mac.
 
 - Remote Login enabled on the USER Mac so CORPO can SSH into it:
 
@@ -88,7 +93,7 @@ Then install and start the LaunchAgent:
 make install
 ```
 
-`make install` creates `~/bin` on the USER Mac if needed, writes the executable connector at `~/bin/tmate-corpo`, runs `chmod 0755`, and adds `$HOME/bin` to the USER Mac zsh startup files before it returns. The background service keeps the CORPO user-space `sshd` running.
+`make install` creates `~/bin` on the USER Mac if needed, writes the executable connector at `~/bin/tmate-corpo`, runs `chmod 0755`, and adds `$HOME/bin` to the USER Mac zsh startup files before it returns. The background service keeps the CORPO user-space `sshd` and reverse tunnel running.
 
 By default, the USER Mac command is written to:
 
