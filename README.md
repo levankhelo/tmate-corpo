@@ -1,5 +1,11 @@
 # tmate-corpo
 
+## About
+
+The goal of this project is to make CORPO Macs, where normal SSH access may be disabled or impractical, reachable from a personal USER Mac by using `tmate` as the access channel.
+
+The CORPO Mac runs a persistent background `tmate` session. The USER Mac must be reachable from the CORPO Mac over the same LAN with Remote Login enabled, because the CORPO Mac uses SSH only to publish or refresh the small `tmate-corpo` connector command on the USER Mac. After that, the USER connects back into the CORPO Mac by running `tmate-corpo` from their personal machine.
+
 `tmate-corpo` runs on the CORPO Mac. It keeps a background tmate session open on that CORPO Mac and publishes a simple `tmate-corpo` command to the USER Mac over SSH.
 
 The USER runs `tmate-corpo` on their own Mac to connect into the current CORPO Mac tmate session. When the CORPO service restarts or creates a new tmate session, it rewrites the USER Mac command with the new tmate SSH command.
