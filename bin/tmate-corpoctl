@@ -1,0 +1,337 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
+export TMATE_CORPO_LOCAL_CONFIG="${TMATE_CORPO_LOCAL_CONFIG:-$REPO_ROOT/.tmate-corpo.env}"
+# shellcheck source=../lib/common.sh
+source "$REPO_ROOT/lib/common.sh"
+
+INSTALLED_SERVICE="$INSTALL_ROOT/bin/tmate-corpo-service"
+
+usage() {
+  cat <<EOF
+Usage:
+  make config
+  USER_MAC=user@user-mac.local make install
+  make start
+  make stop
+  make restart
+  make status
+  make logs
+  make uninstall
+
+Environment:
+  USER_MAC                    USER Mac SSH target that receives the connector.
+  USER_COMMAND_PATH           Command path created on USER Mac. Default: /usr/local/bin/tmate-corpo
+  TMATE_BIN                   Absolute tmate path. Auto-detected during install.
+  REMOTE_INSTALL_WITH_SUDO    Use noninteractive sudo install on USER Mac. Default: 0
+  SKIP_SSH_COPY_ID            Do not try ssh-copy-id during install. Default: 0
+  TMATE_REFRESH_SECONDS       Manager loop interval. Default: 10
+  TMATE_EMPTY_GRACE_SECONDS   Seconds after last client leaves before restart. Default: 5
+  TMATE_RESTART_ON_DISCONNECT Restart session after a client disconnects. Default: 1
+
+Examples:
+  make config
+  make install
+  USER_MAC=alex@mac-mini.local make install
+  USER_MAC=alex@mac-mini.local USER_COMMAND_PATH='~/bin/tmate-corpo' make install
+  USER_MAC=alex@mac-mini.local REMOTE_INSTALL_WITH_SUDO=1 make install
+EOF
+}
+
+prompt_default() {
+  local prompt="$1"
+  local default_value="$2"
+  local value
+
+  if [[ -n "$default_value" ]]; then
+    read -r -p "$prompt [$default_value]: " value
+    printf '%s\n' "${value:-$default_value}"
+  else
+    read -r -p "$prompt: " value
+    printf '%s\n' "$value"
+  fi
+}
+
+prompt_yes_no() {
+  local prompt="$1"
+  local default_value="$2"
+  local value
+  local suffix="[y/N]"
+
+  [[ "$default_value" == "1" ]] && suffix="[Y/n]"
+
+  while true; do
+    read -r -p "$prompt $suffix: " value
+    value="${value:-$([[ "$default_value" == "1" ]] && printf 'y' || printf 'n')}"
+
+    case "$value" in
+      y|Y|yes|YES)
+        printf '1\n'
+        return 0
+        ;;
+      n|N|no|NO)
+        printf '0\n'
+        return 0
+        ;;
+      *)
+        printf 'Please answer y or n.\n' >&2
+        ;;
+    esac
+  done
+}
+
+check_config_access() {
+  local ssh_ok=0
+  local path_ok=0
+
+  printf '\nChecking SSH access from CORPO Mac to USER Mac %s...\n' "$FILE_TARGET_MAC"
+
+  if ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" true >/dev/null 2>&1; then
+    printf 'OK: SSH key login works.\n'
+    ssh_ok=1
+  else
+    printf 'Issue: CORPO Mac cannot SSH into USER Mac with key login: %s.\n' "$FILE_TARGET_MAC"
+    printf 'Suggested steps:\n'
+    printf '  1. On USER Mac, enable Remote Login: System Settings -> General -> Sharing -> Remote Login\n'
+    printf '  2. Run: ssh-copy-id %s\n' "$FILE_TARGET_MAC"
+    printf '  3. Test: ssh %s true\n' "$FILE_TARGET_MAC"
+
+    if have ssh-copy-id && [[ "$(prompt_yes_no "Run ssh-copy-id now?" "0")" == "1" ]]; then
+      ssh-copy-id "$FILE_TARGET_MAC"
+      if ssh -o BatchMode=yes -o ConnectTimeout=8 "$FILE_TARGET_MAC" true >/dev/null 2>&1; then
+        printf 'OK: SSH key login works now.\n'
+        ssh_ok=1
+      fi
+    fi
+  fi
+
+  if (( ssh_ok == 1 )); then
+    printf '\nChecking USER Mac command path %s...\n' "$FILE_TARGET_PATH"
+    if target_path_ready_quiet; then
+      printf 'OK: USER Mac command path is writable.\n'
+      path_ok=1
+    else
+      printf 'Issue: cannot write %s on %s.\n' "$FILE_TARGET_PATH" "$FILE_TARGET_MAC"
+      printf 'Suggested steps:\n'
+      printf '  1. Use a user-writable path: USER_COMMAND_PATH='\''~/bin/tmate-corpo'\'' make config\n'
+      printf '  2. Or create and permit a bin dir on USER Mac: ssh %s '\''mkdir -p ~/bin'\''\n' "$FILE_TARGET_MAC"
+      printf '  3. Or configure passwordless sudo and set REMOTE_INSTALL_WITH_SUDO=1.\n'
+    fi
+  fi
+
+  printf '\nSaved config files:\n'
+  printf '  %s\n' "$LOCAL_CONFIG_FILE"
+  printf '  %s\n' "$CONFIG_FILE"
+
+  if (( ssh_ok == 1 && path_ok == 1 )); then
+    printf '\nConfig looks ready. Run: make install\n'
+  else
+    printf '\nConfig was saved, but fix the issues above before running make install.\n'
+  fi
+}
+
+configure() {
+  load_config
+
+  printf 'tmate-corpo configuration\n\n'
+
+  USER_MAC="$(prompt_default "USER Mac SSH address, for example user@mac-mini.local" "${USER_MAC:-${FILE_TARGET_MAC:-}}")"
+  [[ -n "$USER_MAC" ]] || die "USER Mac SSH address is required"
+  FILE_TARGET_MAC="$USER_MAC"
+
+  USER_COMMAND_PATH="$(prompt_default "Command path to create on USER Mac" "${USER_COMMAND_PATH:-$FILE_TARGET_PATH}")"
+  FILE_TARGET_PATH="$USER_COMMAND_PATH"
+  REMOTE_INSTALL_WITH_SUDO="$(prompt_yes_no "Use noninteractive sudo for install on USER Mac?" "$REMOTE_INSTALL_WITH_SUDO")"
+  SKIP_SSH_COPY_ID="$(prompt_yes_no "Skip ssh-copy-id attempts during install?" "$SKIP_SSH_COPY_ID")"
+
+  require_tmate
+
+  write_local_config
+  write_config
+  check_config_access
+}
+
+write_plist() {
+  mkdir -p "$(dirname "$PLIST_FILE")" "$LOG_DIR"
+  cat >"$PLIST_FILE" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$INSTALLED_SERVICE</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>WorkingDirectory</key>
+  <string>$INSTALL_ROOT</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TMATE_CORPO_HOME</key>
+    <string>$INSTALL_ROOT</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>$STDOUT_LOG</string>
+  <key>StandardErrorPath</key>
+  <string>$STDERR_LOG</string>
+</dict>
+</plist>
+EOF
+}
+
+launchctl_bootout() {
+  launchctl bootout "$(launch_domain)" "$PLIST_FILE" >/dev/null 2>&1 || true
+}
+
+launchctl_bootstrap() {
+  local domain
+  domain="$(launch_domain)"
+
+  launchctl_bootout
+  launchctl bootstrap "$domain" "$PLIST_FILE"
+  launchctl enable "$domain/$LABEL" >/dev/null 2>&1 || true
+  launchctl kickstart -k "$domain/$LABEL" >/dev/null 2>&1 || true
+}
+
+install_files() {
+  mkdir -p "$INSTALL_ROOT/bin" "$INSTALL_ROOT/lib" "$LOG_DIR"
+  install -m 0755 "$REPO_ROOT/bin/tmate-corpo-service" "$INSTALLED_SERVICE"
+  install -m 0644 "$REPO_ROOT/lib/common.sh" "$INSTALL_ROOT/lib/common.sh"
+}
+
+install_service() {
+  require_macos
+  require_tmate
+  require_target
+
+  install_files
+  write_config
+  write_plist
+  ensure_ssh_login
+  preflight_target_path
+  launchctl_bootstrap
+
+  log "installed and started $LABEL"
+  log "USER Mac command will be written to $FILE_TARGET_MAC:$FILE_TARGET_PATH"
+}
+
+uninstall_service() {
+  require_macos
+  launchctl_bootout
+  stop_tmate
+  rm -f "$PLIST_FILE"
+  log "uninstalled $LABEL"
+}
+
+start_service() {
+  require_macos
+  [[ -f "$PLIST_FILE" ]] || die "service is not installed; run: USER_MAC=user@user-mac.local make install"
+  launchctl_bootstrap
+  log "started $LABEL"
+}
+
+stop_service() {
+  require_macos
+  launchctl_bootout
+  stop_tmate
+  log "stopped $LABEL"
+}
+
+service_status() {
+  require_macos
+  load_config
+
+  if launchctl print "$(launch_domain)/$LABEL" >/dev/null 2>&1; then
+    printf 'launchd: running\n'
+  else
+    printf 'launchd: stopped\n'
+  fi
+
+  if tmate_alive; then
+    printf 'tmate: running\n'
+    printf 'clients: %s\n' "$(tmate_client_count)"
+    printf 'connect: %s\n' "$(tmate_connect_command)"
+  else
+    printf 'tmate: stopped\n'
+  fi
+
+  printf 'USER Mac command: %s:%s\n' "${FILE_TARGET_MAC:-unset}" "$FILE_TARGET_PATH"
+  printf 'logs: %s %s\n' "$STDOUT_LOG" "$STDERR_LOG"
+}
+
+show_logs() {
+  mkdir -p "$LOG_DIR"
+  touch "$STDOUT_LOG" "$STDERR_LOG"
+  tail -n 80 -f "$STDOUT_LOG" "$STDERR_LOG"
+}
+
+publish_once() {
+  local connect_command
+
+  load_config
+  require_tmate
+  require_target
+  start_tmate
+
+  connect_command="$(tmate_connect_command)"
+  [[ -n "$connect_command" ]] || die "tmate did not return a connect command"
+  publish_connector "$connect_command"
+}
+
+main() {
+  local command="${1:-help}"
+
+  case "$command" in
+    install)
+      load_config
+      install_service
+      ;;
+    config)
+      configure
+      ;;
+    uninstall)
+      load_config
+      uninstall_service
+      ;;
+    start)
+      load_config
+      start_service
+      ;;
+    stop)
+      load_config
+      stop_service
+      ;;
+    restart)
+      load_config
+      stop_service
+      start_service
+      ;;
+    status)
+      service_status
+      ;;
+    logs)
+      show_logs
+      ;;
+    once)
+      publish_once
+      ;;
+    help|-h|--help)
+      usage
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"
